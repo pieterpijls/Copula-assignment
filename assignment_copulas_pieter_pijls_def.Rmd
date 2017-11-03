@@ -1,0 +1,280 @@
+---
+title: "Assignment Copulas"
+author: "Pieter Pijls"
+date: "31 October 2017"
+output:
+  html_document:
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document: default
+  word_document: default
+graphics: yes
+---
+
+```{r, include=FALSE}
+# overall knitr options
+knitr::opts_chunk$set(cache = FALSE, echo = TRUE, warning = FALSE, message = FALSE)
+# increase width of R output
+options(width = 250) # comment out for PDF
+```
+
+#Introduction
+
+The outline of this assignment is as follow:
+
+1. In the first part we will explore the data. We will also create different graphs to analyze the `loss` and `expense` data.
+2. In the second part, we will create a model by fitting a Pareto distribution to the variables `loss` and `expense`. In addition, we will discuss the goodness of the fit. 
+3. In the final part, we will model the dependence structure between the variables. This will be done by fiting a Clayton and Gumbel copula to the data. 
+
+First, we start with clearing our memory. Next, we set a seed equal to my student number to get same results over and over again. 
+
+```{r}
+rm(list=ls())
+set.seed(0387948)
+```
+
+Here, we load some useful packages we will need in this assignment for data manipulation and visualisation. 
+```{r}
+library(copula)
+library(fCopulae)
+library(Ecdat)
+library(fGarch)
+library(MASS)
+library(tidyverse)
+library(ggthemes)
+library(plotly)
+library(ggplot2)
+library(knitr)
+library(statmod) 
+library(actuar)
+library(fitdistrplus)
+```
+
+#Import data
+
+We load the RData file with the function `load` and using the following path. You need to specify the **correct path** on your own computer if you want to run the R code!
+
+```{r}
+load("~/Documents/KU LEUVEN/MFAE/STATISTICS FOR FINANCE&INSURANCE/data_copula_387948.RData")
+```
+
+# Data exploration
+
+First, we take a look at the first observations in the dataset `data`. Next, we calculate the summary statistics of the variables `loss`, `expense` and `cens`. The summary statistics shows that `expense` and `loss` have some outliers. Both variables have a very high maximum and a large difference between the median and the mean.   
+
+```{r}
+head(data)
+summary(data)
+```
+
+Next, we plot the an **interactive** histogram of the `loss`and `expense` variable. This also shows we have a heavy right tail for both random variables. 
+
+```{r}
+par(mfrow=c(1,2))
+p <- ggplot(data, aes(x = loss)) +
+  geom_histogram() +
+  theme_hc()
+ggplotly(p)
+
+p <- ggplot(data, aes(x = expense)) +
+  geom_histogram() +
+  theme_hc()
+ggplotly(p)
+```
+
+
+## Bivariate scatterplot
+
+Here, we create a scatterplot when we take the logs the variables `loss` and `expense`. From the graph we observe a positive dependence structure. 
+
+```{r}
+# scatter
+par(mfrow=c(1,1))
+z <- ggplot(data, aes(x = log(loss), y=log(expense))) +
+  geom_jitter() + theme_hc()
+ggplotly(z)
+```
+
+Next, we compute the correlation between `loss` and `expense`. The Pearson correlation coefficient is equal to 0.39. This shows that our obsevation was correct as we have a positive dependence between the two variables. 
+
+```{r}
+cor(data$loss,data$expense)
+```
+
+## Discussion
+Here, we will discuss some features of the observed sample.
+
+First, we compute the variance of `loss` and `expense` with the function `var`. Both variables have a high variance. 
+```{r}
+var(data$loss)
+var(data$expense)
+```
+
+Next, we calculate the skewness of `loss` and `expense` with the function `skewness`. We observe a positive skewness which indicates that the right tail is heavier han the left tail. Also the skewness statistic indicates both variables are highly asymmetrically distributed. 
+
+```{r}
+skewness(data$loss)
+skewness(data$expense)
+```
+
+
+# Fitting models to the marginals
+
+Here, we compute the log-likelihood function for the Pareto model, (taking censoring into account???). First, we create the function `pareto.MLE` to estimate the parameters of the Pareto distribution using Maximum Likelihood. Next, we fit a pareto distribution on the variables `loss` and `expense` and store the parameters in `loglik.loss` and `loglik.expense`.
+
+```{r}
+loglik.loss <- fitdist(data$loss, "pareto", start=list(shape = 1, scale = 500))
+summary(loglik.loss)
+
+loglik.expense <- fitdist(data$expense, "pareto", start=list(shape = 1, scale = 500))
+summary(loglik.expense)
+
+#pareto.MLE <- function(X)
+#{
+ #  n <- length(X)
+  # m <- min(X)
+   #a <- n/sum(log(X)-log(m))
+   #return( c(m,a) ) 
+#}
+
+#loglik.loss <- pareto.MLE(data$loss)
+#loglik.loss
+
+#loglik.expense <- pareto.MLE(data$expense)
+#loglik.expense
+```
+
+Next, we plot the empirical cdf and pareto cdf. 
+
+```{r}
+#Loss
+plot(ecdf(data$loss), do.points = FALSE, xlab = 'Loss', ylab = 'CDF', main = 'Comparison of Empirical CDF and Pareto CDF', xlim = c(0, max(data$loss)), lwd = 2)
+# Fitted CDF
+curve(ppareto(x, shape=loglik.loss$estimate[1], scale=loglik.loss$estimate[2]), ylab="Probability", main="Pareto CDF",col=2, lwd=2, add=T)
+legend('right', c('Empirical CDF', 'Fitted CDF'), col = c(1, 2), lwd = 2)
+
+#Expense
+plot(ecdf(data$expense), do.points = FALSE, xlab = 'Expense', ylab = 'CDF', main = 'Comparison of Empirical CDF and Pareto CDF', xlim = c(0, max(data$ expense)), lwd = 2)
+# Fitted CDF
+curve(ppareto(x, shape=loglik.loss$estimate[1], scale=loglik.loss$estimate[2]), ylab="Probability", main="Pareto CDF",col=2, lwd=2, add=T)
+legend('right', c('Empirical CDF', 'Fitted CDF'), col = c(1, 2), lwd = 2)
+```
+
+Another way to analyse the fit.
+
+```{r}
+hist(data$loss, pch=20, breaks=25, prob=TRUE, main="")
+#curve(dpareto(x,loglik.loss[1],loglik.loss[2]), col="red", lwd=2, add=T)
+curve(dpareto(x, shape=loglik.loss$estimate[1], scale=loglik.loss$estimate[2]), ylab="Probability", main="Pareto CDF",col=2, lwd=2, add=T)
+```
+
+Finally, we compute the Akaike Information Criterion (AIC) for this model.
+
+```{r}
+loglik.loss$aic
+loglik.expense$aic
+```
+
+Comment on goodness-of-fit and the estimated parameters!!!
+
+
+
+# Modeling the Dependence Structure 
+
+Given that the marginal distributions have been fitted, we can finally model the dependence structure between the variables. Firstly, plot the pseudo-observations and describe what you observe. What does this mean for the dependence (e.g. tail dependence or rank correlation) between the variables and what properties should an adequate model have?
+
+
+```{r}
+u1 <- ppareto(data$loss, shape=loglik.loss$estimate[1], scale = loglik.loss$estimate[2])
+u2 <-ppareto(data$expense, shape=loglik.expense$estimate[1], scale = loglik.expense$estimate[2])
+
+#uniform-transformed flows
+U.hat = cbind(u1,u2)
+U.hat = as.data.frame(U.hat)
+
+#histograms of both samples of uniform-transformed flows and their scatterplot.
+par(mfrow=c(1,2), cex.axis=1.2, cex.lab=1.2, cex.main=1.2)
+hist(u1, main="Loss", xlab=expression(hat(U)[1]), freq = FALSE)
+hist(u2, main="Expense", xlab=expression(hat(U)[2]), freq = FALSE)
+#some deviations from uniform distribution (might be due to random variation). 
+#maybe skewed t-model is not correct and one can try semi-parametric pseudo ML approach
+```
+
+Next, we create an **interactive** scatterplot of the uniform-transformed data. Notice, the positive dependence stucture between `u1` and `u2`. Also the observations in the scatterpot show some tail dependence.
+
+```{r}
+#scatterplot of uniform-transformed flows
+# scatter
+par(mfrow=c(1,1))
+z <- ggplot(U.hat, aes(x = U.hat$u1 ,y=U.hat$u2)) +
+  geom_jitter() + theme_hc()
+ggplotly(z)
+```
+
+##Clayton copula
+
+Next, we fit Clayton copula using the non-parametric approach by Genest and Rivest (1993).
+
+```{r}
+tau=0.5
+
+## Define the Clayton copula object
+th <- iTau(claytonCopula(), tau = tau)
+cc <- claytonCopula(th)
+```
+
+```{r}
+## Copula (wire frame and level curves)
+wireframe2(cc, FUN = pCopula)
+contourplot2(cc, FUN = pCopula)
+
+## Copula density (wire frame and level curves)
+wireframe2(cc, FUN = dCopula, delta = 0.02)
+contourplot2(cc, FUN = dCopula)
+```
+
+
+##Gumbel copula
+
+Finally, we fit Gumbel copula using the non-parametric approach by Genest and Rivest (1993).
+To fit the copula we will be using maximum likelihood. If possible, account for censoring. Are the results different? Select the model that you most prefer, and provide an explanation regarding your choice.
+
+```{r}
+## Define the Gumbel copula object
+th <- iTau(gumbelCopula(), tau = tau)
+gc <- gumbelCopula(th)
+```
+
+```{r}
+## Copula (wire frame and level curves)
+wireframe2(gc, FUN = pCopula)
+contourplot2(gc, FUN = pCopula)
+
+## Copula density (wire frame and level curves)
+wireframe2(gc, FUN = dCopula, delta = 0.02)
+contourplot2(gc, FUN = dCopula)
+```
+
+Hint: the log likelihood of an observation (x1,x2,δ), with δ indicating censoring, equals
+log L(x1, x2, δ) = (1 − δ) log f(x1, x2) + δ [log f2(x2) + log (1 − ∂x2 C(F1(x1), F2(x2))] .
+Here X1 is the possibly censored loss variable and X2 the expenses variable. The marginal cumulative distributions functions are denoted F1 and F2, f is the joint density and f2 the density of X2.
+
+```{r}
+
+```
+
+
+
+##Discussion
+
+Discuss the results, and give an explanation about why you would prefer one method more than the other. Does the observed tail dependence coincide with the tail dependence predicted by the model?
+
+What are the advantages and/or disadvantages of your selected model? 
+
+Explain how you would generate random samples according to the chosen bivariate model for losses and expenses. 
+
+How would you defend the chosen model for losses and expenses to your employer with a less statistical background?
