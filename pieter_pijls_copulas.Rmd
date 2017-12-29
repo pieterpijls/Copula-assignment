@@ -1,0 +1,420 @@
+---
+title: "Statistics for Finance and Insurance Assignment 1: Copulas"
+author: Pieter Pijls^[r0387948 (Faculty of Economics and Business, KU Leuven, Leuven,
+  Belgium)]
+date: "Academic year 2017-2018"
+output:
+  pdf_document:
+    fig_height: 3
+    fig_width: 10
+    latex_engine: xelatex
+    fig_caption: yes
+    includes:  
+      in_header: preamble-latex.tex
+  word_document: default
+  html_document:
+    df_print: paged
+always_allow_html: yes
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos = 'H')
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+We investigate a dataset consisting of losses (`loss`) and expenses (`expense`) for $n$ clients of an insurance company. In the first part we will explore the data. We will also create different graphs to analyze the `loss` and `expense` data. In the second part, we will create a model by fitting a Pareto distribution to the variables `loss` and `expense`. In addition, we will discuss the goodness of the fit. In the final part, we will model the dependence structure between the variables. This will be done by fiting a Clayton $C^{\text{Cl}}(u_1,u_2)$ and Gumbel $C^{\text{Cu}}(u_1,u_2)$ copula to the data. 
+
+```{r,  include=FALSE}
+#Set seed and clear memory
+rm(list=ls())
+set.seed(0387948)
+```
+
+```{r, include=FALSE}
+#Load packages
+packages <- c("copula","mgcv", "fCopulae", "Ecdat", "fGarch", "MASS", "tidyverse", "ggthemes","plotly","ggplot2","xtable","knitr","statmod", "actuar", "fitdistrplus", "PerformanceAnalytics", "gridExtra", "grid", "scales", "quadprog","quantmod","plyr","reshape","kableExtra","xts","float")
+
+suppressMessages(packages <- lapply(packages, FUN = function(x) {
+  if (!require(x, character.only = TRUE)) {
+    install.packages(x)
+    library(x, character.only = TRUE)
+  }
+}))
+```
+
+```{r,  include=FALSE}
+# Load data
+load("~/Documents/KU LEUVEN/MFAE/STATISTICS FOR FINANCE&INSURANCE/data_copula_387948.RData")
+```
+
+```{r,  include=FALSE}
+# create boolean parameter
+data$rc <- !(data$cens==0)
+```
+
+# Data exploration
+
+First, we plot the histogram of the `loss` and `expense` variable in Figure 1 to get an idea of the underlying distribution. The histograms illustrate that both variables contain a heavy right tail. We observe extreme outliers which are in many cases censored. 
+
+```{r,  include=FALSE}
+#head(data)
+summary(data)
+```
+
+```{r fig1, echo=FALSE, fig.cap="\\label{fig:fig1}Histogram of the loss and expense variable"}
+# histograms
+p1 <- ggplot(data, aes(x = loss)) +
+  geom_histogram(binwidth = 50000) +
+  theme_hc()
+
+p2 <- ggplot(data, aes(x = expense)) +
+  geom_histogram(binwidth = 10000 ) +
+  theme_hc()
+
+grid.arrange(p1,p2,ncol=2)
+```
+
+In Figure 2 we create a scatterplot where we take the logs the variables `loss` and `expense` to investigate the dependence structure. We take the log transformation to enhance the visualization of the `loss` and `expense` observations. This log transformation preserves the order of the observations while making outliers less extreme. The censored and non-censored obsevations are seperated using different colours. The scatterplot shows a positive dependence structure between the two variables.
+
+```{r fig2, echo=FALSE, fig.cap="\\label{fig:fig2}Scatterplot of loss and expense variable"}
+# scatter
+par(mfrow=c(1,1))
+z <- ggplot(data, aes(x = log(loss), y=log(expense),colour=rc)) +
+  geom_jitter() + theme_hc() + scale_colour_discrete(name="Censored?", breaks=c(FALSE,TRUE),labels=c("Not censored","Censored"))
+z
+```
+
+```{r, include=F}
+#z <- ggplot(data, aes(x = log(loss), y=log(expense),group=)) +
+  #geom_jitter(x=log(data$loss[data$rc]),color="red") + geom_jitter(x=log(data$loss[!data$rc]))+ theme_hc()
+```
+
+Next, we compute the Pearson correlation coefficient $\rho$ between `loss` and `expense` which is equal to 0.39. The coefficient $\rho$ shows that our observation was correct as there exists a positive linear dependence between the two variables.
+
+```{r, include=F}
+#Pearson correlation
+cor(data$loss,data$expense)
+```
+
+In this section we will briefly discuss some features of the observed sample. First, we compute the mean and standard deviation of `loss` and `expense` with the function `sd`. The standard deviations contain high values. Next, we calculate the skewness of `loss` and `expense` with the function `skewness`. We observe a positive skewness which indicates that the right tail is heavier than the left tail. Also the skewness statistic indicates both variables are highly asymmetrically distributed. These statistics show that the variables expense and `loss` have some outliers. Both variables have a very high maximum and a large difference between the median and the mean.   
+
+```{r, include=FALSE}
+#Summary stats
+mean(data$loss)
+mean(data$expense)
+
+sd(data$loss)
+sd(data$expense)
+
+skewness(data$loss)
+skewness(data$expense)
+
+kurtosis(data$loss)
+kurtosis(data$expense)
+
+dt <- data.frame(matrix(ncol = 2, nrow = 4))
+colnames(dt) <- c("Loss","Expense")
+rownames(dt) <- c("Mean","Standard Deviation","Skewness","Kurtosis")
+dt[1,] <- c(mean(data$loss),mean(data$expense))
+dt[2,] <- c(sd(data$loss),sd(data$expense))
+dt[3,] <- c(skewness(data$loss),skewness(data$expense))
+dt[4,] <- c(kurtosis(data$loss),kurtosis(data$expense))
+```
+
+```{r, echo=FALSE}
+# Table
+kable(dt, format = "latex", caption = "Summary Statistics", booktabs = T) %>% kable_styling(latex_options = c("striped", "hold_position"))
+```
+
+# Modelling the maginals
+
+Here, we fit a Pareto distirbution on each of the marginals by means of maximum likelihood estimation (MLE). First, we create the log-likelihood function for the Pareto model $\mathcal{L}({\alpha},{\beta})$ taking censoring into account. The general log-likelihood function $\mathcal{L}$ is denoted as as:
+
+\[ \mathcal{L}({\beta})=\prod_{i=1}^{n}({f(x_i)}^{1-\delta_i} \cdot ({1 - F(c_i)}^{\delta_i}, \]
+
+where $c_i$ is the observed claim amount in case of censoring (i.e. when $\delta_i = 1$) of the $i$th policy.
+
+Inserting the cdf $F$ and pdf $f$ of the Pareto distribution with the shape parameter $\alpha$ and scale parameter $\beta$ gives us:
+
+\[ \mathcal{L}({\alpha},{\beta})=\prod_{i=1}^{n}\left(\alpha\frac{\beta^{\alpha}}{x_i^{\alpha+ 1}}\right)^{1-\delta_i} \cdot \left(\frac{\beta}{c_i}\right)^{\alpha \delta_i}.\]
+
+First, we create the function `loglik.pareto.loss` (see R code) to estimate the parameters of the Pareto distribution using Maximum Likelihood taking censoring into account. Next, we fit a pareto distribution on the variables `loss`. Similarly, we fit a pareto distribution to `expense` using the function `fitdist`. Normally, we use the method of moments for the starting values of $\alpha$ and $\beta$. However, another appropriate option is to perform several optimizations and give in the values of previous optimizations as the starting value in the next optimization. After different optimizations the values converge to the optimal values for the parameters $\alpha$ and $\beta$. Finally, we take a look at the shape parameter $\alpha$ and scale parameter $\beta$ of the Pareto models. The shape parameter $\alpha$ of losses is lower than the expenses, which means that the expenses have more observations in the right tail. The scale parameters $\beta$ are close to each other. 
+
+```{r, include=FALSE}
+# Log likelihood functions
+x  <- data$loss 
+rc <- data$rc
+loglik.pareto.loss <- function(par){ 
+  sum(dpareto(x[!rc],par[1],par[2],log=T)) + sum(ppareto(x[rc],par[1],par[2],log.p=T,lower.tail=F)) 
+} #Loss
+
+loglik.pareto.expense <- fitdist(data$expense, "pareto") #Expenses
+```
+
+```{r, include=FALSE}
+# Optimize
+oo <- optim(c(1,13161),loglik.pareto.loss,control=list(fnscale=-1))
+par.pareto.loss <- oo$par
+```
+
+```{r,  include=FALSE}
+# Parameters
+par.pareto.loss
+loglik.pareto.expense$estimate
+```
+
+```{r, echo=FALSE}
+# Table with parameters
+dt <- data.frame(matrix(ncol = 2, nrow = 2))
+colnames(dt) <- c("Loss","Expense")
+rownames(dt) <- c("alpha","beta")
+dt[1,] <- c(par.pareto.loss[1],loglik.pareto.expense$estimate[1])
+dt[2,] <- c(par.pareto.loss[2],loglik.pareto.expense$estimate[2])
+
+kable(dt, format = "latex", caption = "Parameters Pareto Model", booktabs = T) %>% kable_styling(latex_options = c("striped", "hold_position"))
+```
+
+Next, we compare the empirical cdf with the Pareto model for the `loss` variable to check the goodness-of-fit using the estimated values for $\alpha$ and $\beta$. From Figure 3 we observe that the model gives us an adequate fit. When we compare the empirical cdf with the Pareto model for the `expense` variable we also have an adequate fit. 
+ 
+```{r fig3, echo=FALSE, fig.cap="\\label{fig:fig3}Comparison of Empirical CDF and Pareto CDF"}
+par(mfrow=c(1,2))
+
+#Loss
+plot(ecdf(data$loss), do.points = FALSE, xlab = 'Loss', ylab = 'CDF', main = '',  xlim = c(0, max(data$loss)), lwd = 2)
+# Fitted CDF
+x<-data$loss 
+curve(ppareto(x, shape=par.pareto.loss[1], scale=par.pareto.loss[2]), ylab="Probability", main="Pareto CDF",col=2, lwd=2, add=T)
+legend('right', c('Empirical CDF', 'Fitted CDF'), col = c(1, 2), lwd = 2)
+
+#Expense
+plot(ecdf(data$expense), do.points = FALSE, xlab = 'Expense', ylab = 'CDF', main = '', xlim = c(0, max(data$ expense)), lwd = 2)
+# Fitted CDF
+curve(ppareto(x, shape=loglik.pareto.expense$estimate[1], scale=loglik.pareto.expense$estimate[2]), ylab="Probability", main="Pareto CDF",col=2, lwd=2, add=T)
+legend('right', c('Empirical CDF', 'Fitted CDF'), col = c(1, 2), lwd = 2)
+```
+
+Finally, we compute the Akaike Information Criterion (AIC) and Bayesian Information Criterion (BIC) for both models.
+
+```{r, echo=F}
+# AIC and BIC
+dt <- data.frame(matrix(ncol = 2, nrow = 2))
+colnames(dt) <- c("Loss","Expense")
+rownames(dt) <- c("AIC","BIC")
+
+AIC.pareto.loss <- 2*2-2*oo$value
+BIC.pareto.loss <- log(nrow(data))*2-2*oo$value
+
+dt[1,] <- c(AIC.pareto.loss,loglik.pareto.expense$aic)
+dt[2,] <- c(BIC.pareto.loss,loglik.pareto.expense$bic)
+
+kable(dt, format = "latex", caption = "Information Criteria", booktabs = T) %>% kable_styling(latex_options = c("striped", "hold_position"))
+```
+
+# Modeling the Dependence Structure 
+## Pseudo-observations
+
+Now we fitted the marginal distributions we can model the dependence structure between the variables `loss` and `expense`. We calculate the pseudo-observations `u1` and `u2` using the estimated parameters of our Pareto model. Notice, censoring is taken into account in `u1` as it is modeled with the parameters of the censored Pareto model. In Figure 4 we construct a histogram of the the pseudo-observations. We observe some deviations from uniform distribution $U$ which might be due to random variation. 
+
+```{r fig4, echo=FALSE, fig.cap="\\label{fig:fig4}Histogram of the the pseudo-observations"}
+# Pseudo-observations
+u1 <- ppareto(data$loss, shape=par.pareto.loss[1], scale = par.pareto.loss[2])
+u2 <- ppareto(data$expense, shape=loglik.pareto.expense$estimate[1], scale = loglik.pareto.expense$estimate[2])
+
+#uniform-transformed 
+U.hat = cbind(u1,u2)
+
+#histograms
+par(mfrow=c(1,2), cex.axis=1.2, cex.lab=1.2, cex.main=1.2)
+hist(u1, main="Loss", xlab=expression(hat(U)[1]), freq = FALSE)
+hist(u2, main="Expense", xlab=expression(hat(U)[2]), freq = FALSE)
+```
+
+Next, we create a bivariate scatterplot of the uniform-transformed data in Figure 5. Notice, the positive dependence stucture between `u1` and `u2`. Also the observations in the scatterpot indicate there exist upper tail dependence. An adequate model should contain a positive dependence structure and upper tail dependence. From our experience we know the Gumbel copula $C^{\text{Cu}}(u_1,u_2)$ is acceptable as it contains a positive dependence stucture and upper tail dependence. The Clayton copula $C^{\text{Cl}}(u_1,u_2)$ properties makes it an adequate model for lower tail dependence.
+
+```{r fig6, echo=FALSE, fig.cap="\\label{fig:fig6}Bivariate scatterplot of the uniform-transformed data"}
+# Scatter 
+U.hatgraph = as.data.frame(U.hat)
+par(mfrow=c(1,1))
+z <- ggplot(U.hatgraph, aes(x = U.hatgraph$u1 ,y=U.hatgraph$u2)) +
+  geom_jitter() + theme_hc()
+z
+```
+
+## Non-parametric Approach
+
+First, we fit a Clayton and Gumbel copula using the non-parametric approach by Genest and Rivest (1993). The procedure of Genest and River (1993) provides us a strategy for selecting the parametric family of Archimedean copulas that provides the best possible fit to a given set of data. Therefore we use their estimation procedure to find the one-dimensional empirical distribution function. Figure 7 shows the empirical distribution function using the Gumbel $C^{\text{Cu}}(u_1,u_2)$ and Clayton copula $C^{\text{Cl}}(u_1,u_2)$. Figure 6 clearly illustrates that the non-parametric Gumbel has a better fit to the data as the non-parametric Gumbel. This result could be expected as we earlier mentioned the Gumbel will give a better fit as it incorporates the observed upper tail dependence. 
+
+```{r, include=F}
+loss    <- data[,1] 
+expense <- data[,2]
+
+# create unfirom from zero to one
+z <- seq(0,1,length.out =100)
+
+# Kendall Distribution Function for Archimedean Copulas
+Kcop <- function(x) {
+  Kn(x,cbind(loss,expense),method="GR")
+}
+
+# calculate Kendells Tau
+Kendall   <- cor(loss, expense, method="kendall") # Kendell tau estimate
+Kendall
+
+# Calculate theta of Gumbel copula
+# tau = 1-(1/theta) <=> theta = 1/(1-tau)
+Gumbel.theta  <- (-1)/(Kendall-1)
+Gumbel.theta
+
+# Calculate theta of Clayton copula
+# tau = theta/(theta+2) <=> theta = 2*tau/(1-tau) 
+Clayton.theta <- (2*Kendall)/(1-Kendall)
+Clayton.theta
+```
+
+```{r, include=F}
+# Enpirical cdf Clayton
+Clayton.K <- function(x){
+  x-(x^(-Clayton.theta)-1)/(-Clayton.theta*x^(-Clayton.theta-1))
+    }
+
+# Empirical cdf Gumbel
+Gumbel.K <- function(x){
+   x - ((-log(x))^Gumbel.theta)/(-Gumbel.theta * (-log(x))^(Gumbel.theta-1)/x)
+    }
+
+```
+
+```{r fig7, echo=FALSE, fig.height=4,fig.width=10 ,fig.cap="\\label{fig:fig7}Archimidean Copula Identification: Non-parametric estimation (black), Non-parametric Clayton (red), Non-parametric Gumbel (green)"}
+plot(z, Kcop(z),col=1 , "l", ylim=c(0,1))
+curve(Clayton.K(x),add=T,col=2)
+curve(Gumbel.K(x),add=T,col=3)
+```
+
+For the non-parametric approach we construct the dataframe `U.np`. In `U.np` we store the empirical cumulative distribution function values of the `loss` and `expense` variable using the `rank` function. First, we fit Clayton copula $C^{\text{Cl}}(u_1,u_2)$. To fit the copula to `U.np` data we will be using maximum likelihood. We use the function `fitCopula` and set the method argument equal to `ml`. Next, we fit Gumbel copula $C^{\text{Cu}}(u_1,u_2)$ using the non-parametric approach. Again we use the same data and arguments as we've done with the Clatyon copula.
+
+```{r, include=F}
+# empirical cumulative distribution function
+U.np=cbind((rank(data$loss)-0.5)/(nrow(data)),(rank(data$expense)-0.5)/(nrow(data)))
+colnames(U.np)=c("u1","u2")
+head(U.np)
+```
+
+```{r, include=F}
+# Clayton
+Ccl = fitCopula(copula=claytonCopula(1, dim=2), data=U.np, method="ml")
+Ccl@estimate
+```
+
+```{r, include=F}
+# Gumbel 
+#Parametric copulas were fit to uniform-transformed flows (Gumbel gives error since data shows negative dependence)
+Cgu = fitCopula(copula=gumbelCopula(), data=U.np, method="ml")
+Cgu@estimate
+```
+
+Next, we plot the empircal copula `EmpCop` together with the contours of the Clayton $C^{\text{Cl}}$ and Gumbel copula $C^{\text{Cu}}$ we fitted using the the non-parametric approach. Figure 7 illustrates that the contours of the Gumbel copula $C^{\text{Cu}}(u_1,u_2)$ are the closest to those of the empirical copula. This can be explained by the fact that the Gumbel copula $C^{\text{Cu}}(u_1,u_2)$ is adequate for modelling upper tail dependence while the Calyton copula incorporates lower tail dependence. For this reason the Gumbel copula $C^{\text{Cu}}(u_1,u_2)$ is preferred over the Clayton copula $C^{\text{Cl}}(u_1,u_2)$ for this specific dataset. 
+
+```{r fig8, echo=FALSE,fig.height=4,fig.width=10 , fig.cap="\\label{fig:fig8}Empricial Copula contours (black) and Non-parametric Clayton and Gumbel (red)"}
+#empirical copula
+n = nrow(data)
+Udex = (1:n)/(n+1)
+Cn = C.n(u = cbind(rep(Udex, n), rep(Udex, each=n)) , U.np, offset=0, method="C")
+EmpCop = expression(contour(Udex,Udex,matrix(Cn,n,n), col=2, add=T))
+
+par(mfrow=c(1,2))
+
+# Non parametric Clayton
+contour(claytonCopula(param=Ccl@estimate[1], dim = 2), 
+        pCopula, main = "Non parametric Clayton",
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]))
+eval(EmpCop)
+
+# Non parametric Gumbel
+contour(gumbelCopula(param=Cgu@estimate[1], dim = 2), 
+        pCopula, main = "Non-Parametric Gumbel",
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]))
+eval(EmpCop)
+```
+
+### Parametric Approach
+
+Second, we fit a Gumbel copula $C^{\text{Cu}}(u_1,u_2)$ using the parametric approach. We use the maximum likelihood method. Notice, censoring is already taken into account when we fitted the Pareto model to the data.
+
+```{r, include=F}
+#Parametric copula were U.hat is modeled with Pareto parameters taking censoring into account
+Cgu.parametric = fitCopula(copula=gumbelCopula(), data=U.hat, method="ml")
+Cgu.parametric@estimate
+```
+
+Finally, we compare the parametric and non-parametric Gumbel $C^{\text{Cu}}(u_1,u_2)$. From Figure 8 it is difficult to compare the goodness of fit. To compare all models we calculate the Akaike Information Criterium (AIC). The copula with the lowest AIC is the non-parametric Gumbel copula $C^{\text{Cu}}(u_1,u_2)$. Therefore, we can say the non-parametric Gumbel copula $C^{\text{Cu}}(u_1,u_2)$ gives the best fit according to the AIC. However, I would prefer the parametric Gumbel as it incorporates the censoring in the dataset. Also the AIC of the non-parametric is very close to the AIC of the parametric Gumbel. Notice, we did not take censoring into account when we use the non-parametric approach. 
+
+```{r fig9, echo=FALSE,fig.height=4,fig.width=10 , fig.cap="\\label{fig:fig9}Empricial Copula contours (black) and non-parametric Gumbel versus Parametric Gumbel (red)"}
+#empirical copula
+par(mfrow=c(1,2))
+
+# Non parametric
+contour(gumbelCopula(param=Cgu@estimate[1], dim = 2), 
+        pCopula, main = "Non-Parametric Gumbel",
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]))
+eval(EmpCop)
+
+# Parametric
+contour(gumbelCopula(param=Cgu.parametric@estimate[1], dim = 2), 
+        pCopula, main = "Parametric Gumbel",
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]))
+eval(EmpCop)
+```
+
+```{r, echo=FALSE}
+# AIC
+dt <- data.frame(matrix(ncol = 1, nrow = 3))
+colnames(dt) <- c("AIC")
+rownames(dt) <- c("Non-Parametric Clayton","Non-Parametric Gumbel","Parametric Gumbel")
+
+AIC.pareto.loss <- 2*2-2*oo$value
+BIC.pareto.loss <- log(nrow(data))*2-2*oo$value
+
+dt[1,] <- AIC(Ccl) # Non-parametric Clayton
+dt[2,] <- AIC(Cgu) # Non-parametric Gumbel
+dt[3,] <- AIC(Cgu.parametric) # Parametric Clayton
+
+kable(dt, format = "latex", caption = "AIC Models", booktabs = T) %>% kable_styling(latex_options = c("striped", "hold_position"))
+```
+
+I would defend the chosen model to my employer with a less statistical background using the contour plots. This gives an intuitive overview of the goodnes of fit for the chosen dependence model. The countour plots illustrates clearly that the model using the Gumbel copula $C^{\text{Cu}}(u_1,u_2)$ has the best fit. 
+
+Finally, to generate random samples according of the chosen bivariate model for losses and expenses I would use the following procedure. I would use the function `rCopula` which can be used to generate random obsevrations given the dependence structure from our model. In this function I incorporate my chosen model and the parametric Gumbel copula $C^{\text{Cu}}(u_1,u_2)$. Next, I would take the inverse of the Pareto cumulative distribution $F^{-1}$ function to end up with bivariate observations for the `loss` and `expense` variable (see R code for more details).
+
+```{r, include=F}
+#simulating observations with the given copula
+U <- rCopula(1000, copula = gumbelCopula(param=Cgu.parametric@estimate , dim = 2))
+plot(U[,1:2], xlab = expression(U[1]), ylab = expression(U[2]))
+```
+
+```{r, include=F}
+#In the following step take the inverse of the Pareto cdf. 
+loss <- pinvpareto(U[,1], shape=par.pareto.loss[1],scale=par.pareto.loss[2])
+expense <- pinvpareto(U[,2], shape=loglik.pareto.expense$estimate[1],scale=loglik.pareto.expense$estimate[2])
+
+randomsample <- cbind(loss,expense)
+
+plot(randomsample[,1:2], xlab = "Loss", ylab ="Expense")
+```
+
+```{r, include=F}
+# scatter (no log transformation)
+par(mfrow=c(1,1))
+z <- ggplot(data, aes(x = loss, y=expense,colour=rc)) +
+  geom_jitter() + theme_hc() + scale_colour_discrete(name="Censored?", breaks=c(FALSE,TRUE),labels=c("Not censored","Censored"))
+z
+```
+
+
+# References
+
+Genest C. and Rivest L.-P. Statistical Inference Procedures for Bivariate Archimedean Copulas (1993). Journal of the American Statistical Association, 88: 1034-1043
